@@ -1,0 +1,4 @@
+/script EVENT_MANAGER:RegisterForEvent("FindID", EVENT_EFFECT_CHANGED, 
+    function(_, _, _, name, _, _, _, _, _, _, id) 
+        if string.find(name, "Kjalnar") then d("Found ID: " .. id) end
+    end)

@@ -1,0 +1,13 @@
+## Title: Khalnar's Nightmare Tracker
+## APIVersion: 101044 101045
+## SavedVariables: KhalnarsNightmareVariables
+## Description: Tracks bone stack counter for Khalnar's Nightmare monster set
+## Version: 1.0.0
+## Author: YourName
+## DependsOn: LibAddonMenu-2.0>=30
+
+src/Main.lua
+src/Defaults.lua
+src/Tracking.lua
+src/Interface.lua
+src/Settings.lua
