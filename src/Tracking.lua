@@ -1,6 +1,7 @@
 -- Khalnar's Nightmare Tracker
 -- Event handling & stack logic
 -- Module initialization
+KNC.Tracking = KNC.Tracking or {}
 function KNC.Tracking.Initialize()
     -- Setup tracking variables
     KNC.currentTarget = nil
@@ -15,7 +16,7 @@ function KNC.Tracking.Initialize()
     EVENT_MANAGER:RegisterForEvent("KNC_EffectChanged", EVENT_EFFECT_CHANGED, KNC.Tracking.OnEffectChanged)
 
     -- Set up cleanup timer
-    KNC.Tracking.cleanupTimer = ZO_Timer.New(KNC.Tracking.CleanupOldStacks, 30)
+    zo_callLater(function() KNC.Tracking.CleanupOldStacks() end, 30000)
 end
 -- Event handler for combat events
 function KNC.Tracking.OnCombatEvent(eventCode, sourceUnitTag, sourceName, sourceDisplayName, targetUnitTag, targetName, targetDisplayName, abilityName, abilityId, actionSlotType, result, isError, hitValue, powerType, powerValue, damageType, damageOverTime, critical, glancing, crushing, missType, abilityActionSlotType, abilityId, sourceUnit, targetUnit)
@@ -143,5 +144,5 @@ function KNC.Tracking.CleanupOldStacks()
     end
 
     -- Restart timer
-    KNC.Tracking.cleanupTimer:Reset()
+    zo_callLater(function() KNC.Tracking.CleanupOldStacks() end, 30000)
 end

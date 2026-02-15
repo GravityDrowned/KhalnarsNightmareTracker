@@ -15,22 +15,17 @@ KNC.variables = ZO_SavedVars:NewAccountWide("KhalnarsNightmareVariables", 1, nil
     debugMode = false,
 })
 
--- Initialize modules
-local tracking = require("Tracking")
-local interface = require("Interface")
-local settings = require("Settings")
-
 -- Event handler for addon loading
 local function OnAddOnLoaded(eventCode, addOnName)
     if addOnName == "KhalnarsNightmareTracker" then
         -- Initialize tracking module
-        tracking.Initialize()
+        KNC.Tracking.Initialize()
         
         -- Initialize interface module
-        interface.Initialize()
+        KNC.Interface.Initialize()
         
         -- Initialize settings module
-        settings.Initialize()
+        KNC.Settings.Initialize()
         
         -- Register slash command
         SLASH_COMMANDS["/knc"] = KNC.SlashCommand
@@ -55,7 +50,7 @@ function KNC.SlashCommand(input)
     local cmd = string.lower(args[1])
     
     if cmd == "reset" then
-        tracking.ResetStacks()
+        KNC.Tracking.ResetStacks()
         d("Khalnar's Nightmare Tracker - Stacks reset")
     elseif cmd == "toggle" then
         KNC.variables.enabled = not KNC.variables.enabled

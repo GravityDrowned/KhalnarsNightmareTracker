@@ -1,6 +1,7 @@
 -- Khalnar's Nightmare Tracker
 -- UI rendering & display
 -- Module initialization
+KNC.Interface = KNC.Interface or {}
 function KNC.Interface.Initialize()
     -- Create UI elements
     KNC.container = WINDOW_MANAGER:CreateTopLevelWindow("KNCContainer")
@@ -29,8 +30,7 @@ function KNC.Interface.Initialize()
     KNC.container:SetHidden(true)
 
     -- Register for move events if unlocked
-    KNC.container:RegisterForDrag()
-    KNC.container:RegisterForEvent(EVENT_WINDOW_MOVING_FINISHED, KNC.Interface.OnPositionChanged)
+    KNC.container:SetHandler("OnMoveStop", function() KNC.Interface.OnPositionChanged() end)
 end
 -- Update UI display based on current stacks
 function KNC.Interface.UpdateUI()
