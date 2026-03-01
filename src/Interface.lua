@@ -39,8 +39,8 @@ local STACK_FONT = "ZoFontWinH4"
 -- Each entry is {red, green, blue, alpha}
 local COLORS = {
     LOW = {0, 1, 0, 1},      -- Green: 1-2 stacks (building)
-    MEDIUM = {1, 1, 0, 1},   -- Yellow: 3-4 stacks (almost ready)
-    HIGH = {1, 0, 0, 1},     -- Red: 5 stacks (procced!)
+    MEDIUM = {1, 1, 0, 1},   -- Yellow: 3 stacks (getting close)
+    HIGH = {1, 0, 0, 1},     -- Red: 4-5 stacks (proc imminent!)
     DEFAULT = {1, 1, 1, 1},  -- White: default/text color
 }
 
@@ -216,20 +216,20 @@ end
 --- Gets the appropriate color for a given stack count
 -- Color coding provides at-a-glance status:
 -- - Green (1-2): Building stacks
--- - Yellow (3-4): Almost at proc
--- - Red (5): Set procced!
+-- - Yellow (3): Getting close
+-- - Red (4-5): Proc imminent!
 --
 -- @param stacks number Current stack count (0-5)
 -- @return table Color as {r, g, b, a}
 function KNC.Interface.GetColorForStacks(stacks)
-    if stacks >= 5 then
-        -- Full stacks - proc imminent/happened
+    if stacks >= 4 then
+        -- 4-5 stacks - proc imminent/happened
         return COLORS.HIGH
     elseif stacks >= 3 then
-        -- Medium stacks - getting close
+        -- 3 stacks - getting close
         return COLORS.MEDIUM
     elseif stacks >= 1 then
-        -- Low stacks - just starting
+        -- 1-2 stacks - building up
         return COLORS.LOW
     else
         -- Zero stacks - use default
