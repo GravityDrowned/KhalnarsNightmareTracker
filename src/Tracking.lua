@@ -10,9 +10,9 @@
     - Synchronizing with the game's effect system
     - Cleaning up stale cached data
     
-    The core mechanic: Khalnar's Nightmare monster set procs after 5 light
-    attacks on the same target. This module counts those attacks and maintains
-    state when switching between enemies.
+    The core mechanic: Khalnar's Nightmare applies a stacking debuff to enemies
+    with each light attack. After 5 stacks, the set procs. This module reads
+    the debuff stacks directly from targets and maintains state when switching.
 ]]
 
 --------------------------------------------------------------------------------
@@ -30,8 +30,8 @@ KNC.Tracking = KNC.Tracking or {}
 --- Maximum number of stacks before the set procs
 local MAX_STACKS = 5
 
---- Ability ID for Khalnar's Nightmare effect
--- Verified ID: 133505
+--- Ability ID for Khalnar's Nightmare debuff on enemies
+-- Verified ID: 133505 (this is the debuff that stacks on targets, not the proc buff)
 local KHALNAR_ABILITY_ID = 133505
 
 --- How often to run garbage collection on stale enemy data (in milliseconds)
@@ -98,6 +98,30 @@ function KNC.Tracking.Initialize()
     if KNC.variables.debugMode then
         d("[KNC] Tracking module initialized")
     end
+end
+
+--------------------------------------------------------------------------------
+-- DEBUFF POLLING
+--------------------------------------------------------------------------------
+
+--- Scans the current target for existing Khalnar debuff stacks
+-- Returns the current stack count from the game's effect system
+-- @return number Stack count (0 if no debuff found)
+function KNC.Tracking.GetTargetDebuffStacks()
+    -- Scan all debuffs on the reticle target
+    for i = 1, GetNumBuffs("reticleover") do
+        local name, startTime, endTime, buffSlot, stackCount, iconFilename, 
+              buffType, effectType, abilityType, statusEffectType, abilityId, 
+              canClickOff, castByPlayer = GetUnitBuffInfo("reticleover", i)
+        
+        -- Found Khalnar's debuff cast by us
+        if abilityId == KNC.KHALNAR_ABILITY_ID and castByPlayer then
+            return stackCount or 0
+        end
+    end
+    
+    -- No debuff found
+    return 0
 end
 
 --------------------------------------------------------------------------------
@@ -192,16 +216,28 @@ function KNC.Tracking.OnTargetChanged(eventCode)
     local newTarget = GetUnitName("reticleover")
     
     if newTarget and newTarget ~= "" then
-        -- Have a new target: load cached stacks or start at 0
+        -- Have a new target: check for existing debuff stacks
         KNC.currentTarget = newTarget
         
-        if KNC.enemyStacks[newTarget] then
+        -- First check if there's an active debuff on the new target
+        local debuffStacks = KNC.Tracking.GetTargetDebuffStacks()
+        
+        if debuffStacks > 0 then
+            -- Target already has debuff stacks from us
+            KNC.currentStacks = debuffStacks
+            
+            if KNC.variables.debugMode then
+                d("[KNC] Target has existing debuff: " .. newTarget .. " (" .. debuffStacks .. " stacks)")
+            end
+        elseif KNC.enemyStacks[newTarget] then
+            -- Fall back to cached stacks if no active debuff
             KNC.currentStacks = KNC.enemyStacks[newTarget].stacks
             
             if KNC.variables.debugMode then
-                d("[KNC] Loaded stacks for " .. newTarget .. ": " .. KNC.currentStacks)
+                d("[KNC] Loaded cached stacks for " .. newTarget .. ": " .. KNC.currentStacks)
             end
         else
+            -- New target with no history
             KNC.currentStacks = 0
             
             if KNC.variables.debugMode then
@@ -234,26 +270,31 @@ function KNC.Tracking.OnEffectChanged(eventCode, unitTag, effectName, effectId, 
         return 
     end
 
-    -- Only process the Khalnar's Nightmare effect
+    -- Only track the debuff on our reticle target (enemy)
+    if unitTag ~= "reticleover" then
+        return
+    end
+
+    -- Only process the Khalnar's Nightmare debuff
     if effectId ~= KNC.KHALNAR_ABILITY_ID then 
         return 
     end
     
     if result == EFFECT_RESULT_GAINED or result == EFFECT_RESULT_UPDATED then
-        -- Effect gained or updated: sync our stacks with game
+        -- Debuff gained or stacks updated: sync directly from game
         local previousStacks = KNC.currentStacks
         KNC.currentStacks = stackCount
         
         if KNC.variables.debugMode and previousStacks ~= stackCount then
-            d("[KNC] Synced stacks from effect: " .. previousStacks .. " -> " .. stackCount)
+            d("[KNC] Debuff stacks on target: " .. previousStacks .. " -> " .. stackCount)
         end
         
         KNC.Interface.UpdateUI()
         
     elseif result == EFFECT_RESULT_FADED then
-        -- Effect faded: set procced and stacks reset
+        -- Debuff faded: reset stacks (target died or debuff expired)
         if KNC.variables.debugMode then
-            d("[KNC] Effect faded - stacks reset")
+            d("[KNC] Debuff faded - stacks reset")
         end
         
         KNC.currentStacks = 0
