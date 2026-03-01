@@ -172,13 +172,18 @@ function KNC.Tracking.PollTargetStacks()
         KNC.Interface.UpdateUI()
     end
     
-    -- Only poll if we have a target
+    -- Handle no-target case
     if not KNC.currentTarget or KNC.currentTarget == "" then
         -- No target: ensure stacks are 0
         if KNC.currentStacks ~= 0 then
             KNC.currentStacks = 0
-            KNC.Interface.UpdateUI()
         end
+        
+        -- Always update UI to show cooldown even without a target
+        -- This ensures the cooldown overlay remains visible when target dies
+        KNC.Interface.UpdateUI()
+        
+        -- Skip debuff polling (no target to poll)
         return
     end
     
