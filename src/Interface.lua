@@ -26,12 +26,11 @@ KNC.Interface = KNC.Interface or {}
 -- CONSTANTS
 --------------------------------------------------------------------------------
 
---- Texture path for the display icon
--- NOTE: This is a placeholder. The actual texture needs to be created.
-local TEXTURE_PATH = "KhalnarsNightmareTracker/textures/khalnar_icon.dds"
+--- Texture path for the display icon (Khalnar's Nightmare set icon)
+local TEXTURE_PATH = "/esoui/art/icons/gear_undbonecolossus_head_a.dds"
 
---- Fallback texture if custom texture is missing
-local FALLBACK_TEXTURE = "/esoui/art/icons/ability_debuff_major_defile.dds"
+--- Fallback texture (same as primary - using ESO's built-in icon)
+local FALLBACK_TEXTURE = "/esoui/art/icons/gear_undbonecolossus_head_a.dds"
 
 --- Font for the stack count label
 local STACK_FONT = "ZoFontWinH4"
