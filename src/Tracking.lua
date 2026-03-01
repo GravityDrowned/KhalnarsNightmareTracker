@@ -52,7 +52,7 @@ local cooldownActive = false     -- Is the set currently on cooldown?
 local cooldownEndTime = 0        -- Game time (ms) when cooldown ends
 
 --- Cooldown duration constants
-local COOLDOWN_DURATION_MS = 5000  -- 5 seconds total cooldown
+local COOLDOWN_DURATION_MS = 4000  -- 4 seconds total cooldown (actual ESO set cooldown)
 local SKELETON_DELAY_MS = 1000     -- 1 second until skeleton spawns
 
 --------------------------------------------------------------------------------
