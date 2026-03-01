@@ -53,6 +53,7 @@ local COLORS = {
 -- KNC.container - TopLevelWindow: Main container
 -- KNC.texture   - CT_TEXTURE: Icon texture
 -- KNC.label     - CT_LABEL: Stack count text
+-- KNC.cooldown  - CT_COOLDOWN: Circular cooldown overlay
 
 --------------------------------------------------------------------------------
 -- INITIALIZATION
@@ -81,6 +82,14 @@ function KNC.Interface.Initialize()
     -- Note: SetTexture will silently fail if file doesn't exist
     KNC.texture:SetTexture(TEXTURE_PATH)
     
+    -- Create the circular cooldown overlay
+    -- This provides the "pie slice" cooldown animation like ability icons
+    KNC.cooldown = WINDOW_MANAGER:CreateControl("KNC_Cooldown", KNC.container, CT_COOLDOWN)
+    KNC.cooldown:SetAnchor(CENTER, KNC.container, CENTER, 0, 0)
+    KNC.cooldown:SetDimensions(KNC.variables.size, KNC.variables.size)
+    KNC.cooldown:SetDrawLevel(2)  -- Above texture, below label
+    KNC.cooldown:SetHidden(true)  -- Hidden by default
+    
     -- Create the stack count label
     -- This overlays the texture to show the numeric count
     KNC.label = WINDOW_MANAGER:CreateControl("KNC_Label", KNC.container, CT_LABEL)
@@ -89,8 +98,8 @@ function KNC.Interface.Initialize()
     KNC.label:SetColor(unpack(COLORS.DEFAULT))
     KNC.label:SetText("")
     
-    -- Ensure label is above texture
-    KNC.label:SetDrawLevel(2)
+     -- Ensure proper layering: texture (1) < cooldown (2) < label (3)
+    KNC.label:SetDrawLevel(3)
     KNC.texture:SetDrawLevel(1)
 
     -- Position the container based on saved settings
@@ -111,6 +120,14 @@ function KNC.Interface.Initialize()
         KNC.Interface.OnPositionChanged()
     end)
     
+    -- Register OnUpdate for cooldown animation updates
+    -- This ensures the cooldown overlay and timer text update smoothly every frame
+    KNC.container:SetHandler("OnUpdate", function()
+        if KNC.Tracking.IsOnCooldown() then
+            KNC.Interface.UpdateUI()
+        end
+    end)
+    
     if KNC.variables.debugMode then
         d("[KNC] Interface module initialized")
     end
@@ -125,8 +142,10 @@ end
 -- - Stack count changes
 -- - Target changes
 -- - Settings changes (enabled, alwaysShow)
+-- - Cooldown state changes
 --
 -- Determines visibility and applies color-coding based on stack level.
+-- During cooldown, shows a circular overlay with remaining time.
 function KNC.Interface.UpdateUI()
     -- Safety check: ensure UI elements exist
     if not KNC.container then 
@@ -139,24 +158,58 @@ function KNC.Interface.UpdateUI()
         return
     end
 
+    -- Check if on cooldown
+    local cooldownRemaining = KNC.Tracking.GetCooldownRemaining()
+    local isOnCooldown = cooldownRemaining > 0
+    
     -- Determine visibility:
-    -- Show if we have stacks OR if alwaysShow is enabled
-    local shouldShow = KNC.currentStacks > 0 or KNC.variables.alwaysShow
+    -- Show if we have stacks OR if alwaysShow is enabled OR if on cooldown
+    local shouldShow = KNC.currentStacks > 0 or KNC.variables.alwaysShow or isOnCooldown
     
     if shouldShow then
         -- Show the display
         KNC.container:SetHidden(false)
         
-        -- Update the label text
-        KNC.label:SetText(tostring(KNC.currentStacks))
-        
-        -- Determine color based on stack count
-        local color = KNC.Interface.GetColorForStacks(KNC.currentStacks)
-        KNC.texture:SetColor(unpack(color))
-        
+        if isOnCooldown then
+            -- === COOLDOWN STATE ===
+            
+            -- Show cooldown overlay with remaining time
+            KNC.cooldown:SetHidden(false)
+            KNC.cooldown:StartCooldown(
+                cooldownRemaining,                    -- Remaining time in ms
+                KNC.COOLDOWN_DURATION_MS,            -- Total duration in ms
+                CD_TYPE_RADIAL,                       -- Radial "pie slice" style
+                CD_TIME_TYPE_TIME_UNTIL,             -- Count down to zero
+                NO_LEADING_EDGE                       -- No leading edge line
+            )
+            
+            -- Dim the icon texture during cooldown
+            KNC.texture:SetColor(0.4, 0.4, 0.4, 1)
+            
+            -- Show cooldown time as text
+            KNC.label:SetText(string.format("%.1f", cooldownRemaining / 1000))
+            KNC.label:SetColor(1, 1, 1, 1)  -- White text
+            
+        else
+            -- === NORMAL STATE (tracking stacks) ===
+            
+            -- Hide cooldown overlay
+            KNC.cooldown:SetHidden(true)
+            
+            -- Update the stack count text
+            KNC.label:SetText(tostring(KNC.currentStacks))
+            
+            -- Color-code icon based on stack count
+            local color = KNC.Interface.GetColorForStacks(KNC.currentStacks)
+            KNC.texture:SetColor(unpack(color))
+            
+            -- Set text color to white for readability
+            KNC.label:SetColor(1, 1, 1, 1)
+        end
     else
-        -- Hide the display
+        -- Hide the display entirely
         KNC.container:SetHidden(true)
+        KNC.cooldown:SetHidden(true)
     end
 end
 
@@ -251,9 +304,10 @@ function KNC.Interface.SetSize(newSize)
     -- Update SavedVariables
     KNC.variables.size = newSize
     
-    -- Resize container and texture
+    -- Resize container, texture, and cooldown overlay
     KNC.container:SetDimensions(newSize, newSize)
     KNC.texture:SetDimensions(newSize, newSize)
+    KNC.cooldown:SetDimensions(newSize, newSize)
     
     if KNC.variables.debugMode then
         d("[KNC] Size set to " .. newSize)

@@ -46,6 +46,15 @@ local lastPollTime = 0
 --- How often to poll for debuff updates (milliseconds)
 local POLL_INTERVAL_MS = 100  -- Poll every 100ms
 
+--- Cooldown state tracking
+-- These track whether the set is on cooldown after proccing
+local cooldownActive = false     -- Is the set currently on cooldown?
+local cooldownEndTime = 0        -- Game time (ms) when cooldown ends
+
+--- Cooldown duration constants
+local COOLDOWN_DURATION_MS = 5000  -- 5 seconds total cooldown
+local SKELETON_DELAY_MS = 1000     -- 1 second until skeleton spawns
+
 --------------------------------------------------------------------------------
 -- STATE VARIABLES
 --------------------------------------------------------------------------------
@@ -75,6 +84,10 @@ function KNC.Tracking.Initialize()
     -- Expose constants for other modules
     KNC.MAX_STACKS = MAX_STACKS
     KNC.KHALNAR_ABILITY_ID = KHALNAR_ABILITY_ID
+    
+    -- Expose cooldown constants for Interface module
+    KNC.COOLDOWN_DURATION_MS = COOLDOWN_DURATION_MS
+    KNC.SKELETON_DELAY_MS = SKELETON_DELAY_MS
 
     -- Register event handlers
     -- Combat events: detect light attacks
@@ -150,6 +163,15 @@ function KNC.Tracking.PollTargetStacks()
     end
     lastPollTime = currentTime
     
+    -- Check if cooldown just expired (will update cooldownActive internally)
+    local cooldownBefore = cooldownActive
+    local cooldownRemaining = KNC.Tracking.GetCooldownRemaining()
+    
+    -- If cooldown just ended, update UI
+    if cooldownBefore and not cooldownActive then
+        KNC.Interface.UpdateUI()
+    end
+    
     -- Only poll if we have a target
     if not KNC.currentTarget or KNC.currentTarget == "" then
         -- No target: ensure stacks are 0
@@ -179,6 +201,39 @@ function KNC.Tracking.PollTargetStacks()
         
         KNC.Interface.UpdateUI()
     end
+end
+
+--- Gets the remaining cooldown time in milliseconds
+-- Also updates cooldown state if it has expired
+-- @return number Remaining cooldown in milliseconds (0 if not on cooldown)
+function KNC.Tracking.GetCooldownRemaining()
+    if not cooldownActive then
+        return 0
+    end
+    
+    local currentTime = GetGameTimeMilliseconds()
+    local remaining = cooldownEndTime - currentTime
+    
+    if remaining <= 0 then
+        -- Cooldown expired
+        cooldownActive = false
+        cooldownEndTime = 0
+        
+        if KNC.variables.debugMode then
+            d("[KNC] Cooldown ended - ready to proc again!")
+        end
+        
+        return 0
+    end
+    
+    return remaining
+end
+
+--- Checks if the set is currently on cooldown
+-- @return boolean True if on cooldown, false otherwise
+function KNC.Tracking.IsOnCooldown()
+    KNC.Tracking.GetCooldownRemaining()  -- Updates state if expired
+    return cooldownActive
 end
 
 --------------------------------------------------------------------------------
@@ -414,12 +469,26 @@ function KNC.Tracking.IncrementStacks(targetName)
 end
 
 --- Called when the set procs (5 stacks reached)
--- Currently just logs in debug mode. This is an extension point for
--- adding sound effects, visual notifications, etc.
+-- Starts the cooldown timer and schedules skeleton spawn notification.
 function KNC.Tracking.OnProcTriggered()
     if KNC.variables.debugMode then
         d("[KNC] *** SET PROCCED! ***")
     end
+    
+    -- Start cooldown timer
+    cooldownActive = true
+    cooldownEndTime = GetGameTimeMilliseconds() + COOLDOWN_DURATION_MS
+    
+    -- Schedule skeleton spawn notification (optional)
+    zo_callLater(function()
+        if KNC.variables.debugMode then
+            d("[KNC] Skeleton spawning!")
+        end
+        -- Extension point: add skeleton spawn visual/sound effects
+    end, SKELETON_DELAY_MS)
+    
+    -- Update UI to show cooldown overlay
+    KNC.Interface.UpdateUI()
     
     -- Extension point: add proc effects here
     -- Examples:
