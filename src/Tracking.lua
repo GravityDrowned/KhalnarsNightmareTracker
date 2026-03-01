@@ -1,148 +1,392 @@
--- Khalnar's Nightmare Tracker
--- Event handling & stack logic
--- Module initialization
+--[[
+    Khalnar's Nightmare Tracker
+    Tracking.lua - Event handling and stack logic
+    
+    This module is responsible for:
+    - Registering and handling ESO combat events
+    - Detecting player light attacks
+    - Managing per-enemy stack state
+    - Tracking target changes
+    - Synchronizing with the game's effect system
+    - Cleaning up stale cached data
+    
+    The core mechanic: Khalnar's Nightmare monster set procs after 5 light
+    attacks on the same target. This module counts those attacks and maintains
+    state when switching between enemies.
+]]
+
+--------------------------------------------------------------------------------
+-- MODULE INITIALIZATION
+--------------------------------------------------------------------------------
+
+--- Tracking module namespace
+-- @table KNC.Tracking
 KNC.Tracking = KNC.Tracking or {}
+
+--------------------------------------------------------------------------------
+-- CONSTANTS
+--------------------------------------------------------------------------------
+
+--- Maximum number of stacks before the set procs
+local MAX_STACKS = 5
+
+--- Ability ID for Khalnar's Nightmare effect
+-- Verified ID: 133505
+local KHALNAR_ABILITY_ID = 133505
+
+--- How often to run garbage collection on stale enemy data (in milliseconds)
+local CLEANUP_INTERVAL_MS = 30000  -- 30 seconds
+
+--- How long to keep enemy stack data before considering it stale (in milliseconds)
+local CACHE_EXPIRY_MS = 300000     -- 5 minutes
+
+--------------------------------------------------------------------------------
+-- STATE VARIABLES
+--------------------------------------------------------------------------------
+
+-- These are initialized in Initialize() and stored on the KNC global table
+-- for access by other modules:
+--
+-- KNC.currentTarget   - string|nil: Name of the current target
+-- KNC.currentStacks   - number: Stack count for current target (0-5)
+-- KNC.enemyStacks     - table: Cache of {enemyName -> {stacks, timestamp}}
+-- KNC.MAX_STACKS      - number: Exposed constant for other modules
+-- KNC.KHALNAR_ABILITY_ID - number: Exposed constant for other modules
+
+--------------------------------------------------------------------------------
+-- INITIALIZATION
+--------------------------------------------------------------------------------
+
+--- Initializes the tracking module
+-- Sets up state variables, registers event handlers, and starts the cleanup timer.
+-- Called once during addon initialization from Main.lua.
 function KNC.Tracking.Initialize()
-    -- Setup tracking variables
-    KNC.currentTarget = nil
-    KNC.currentStacks = 0
-    KNC.enemyStacks = {}
-    KNC.MAX_STACKS = 5
-    KNC.KHALNAR_ABILITY_ID = 163598 -- Placeholder, needs actual ID
+    -- Initialize state variables on the global KNC table
+    KNC.currentTarget = nil     -- No target initially
+    KNC.currentStacks = 0       -- No stacks initially
+    KNC.enemyStacks = {}        -- Empty cache
+    
+    -- Expose constants for other modules
+    KNC.MAX_STACKS = MAX_STACKS
+    KNC.KHALNAR_ABILITY_ID = KHALNAR_ABILITY_ID
 
     -- Register event handlers
-    EVENT_MANAGER:RegisterForEvent("KNC_CombatEvent", EVENT_COMBAT_EVENT, KNC.Tracking.OnCombatEvent)
-    EVENT_MANAGER:RegisterForEvent("KNC_TargetChanged", EVENT_RETICLE_TARGET_CHANGED, KNC.Tracking.OnTargetChanged)
-    EVENT_MANAGER:RegisterForEvent("KNC_EffectChanged", EVENT_EFFECT_CHANGED, KNC.Tracking.OnEffectChanged)
+    -- Combat events: detect light attacks
+    EVENT_MANAGER:RegisterForEvent(
+        "KNC_CombatEvent", 
+        EVENT_COMBAT_EVENT, 
+        KNC.Tracking.OnCombatEvent
+    )
+    
+    -- Target changes: save/load per-enemy stacks
+    EVENT_MANAGER:RegisterForEvent(
+        "KNC_TargetChanged", 
+        EVENT_RETICLE_TARGET_CHANGED, 
+        KNC.Tracking.OnTargetChanged
+    )
+    
+    -- Effect changes: sync with game's effect system
+    EVENT_MANAGER:RegisterForEvent(
+        "KNC_EffectChanged", 
+        EVENT_EFFECT_CHANGED, 
+        KNC.Tracking.OnEffectChanged
+    )
 
-    -- Set up cleanup timer
-    zo_callLater(function() KNC.Tracking.CleanupOldStacks() end, 30000)
+    -- Start periodic cleanup of stale enemy data
+    zo_callLater(function() KNC.Tracking.CleanupOldStacks() end, CLEANUP_INTERVAL_MS)
+    
+    if KNC.variables.debugMode then
+        d("[KNC] Tracking module initialized")
+    end
 end
--- Event handler for combat events
-function KNC.Tracking.OnCombatEvent(eventCode, sourceUnitTag, sourceName, sourceDisplayName, targetUnitTag, targetName, targetDisplayName, abilityName, abilityId, actionSlotType, result, isError, hitValue, powerType, powerValue, damageType, damageOverTime, critical, glancing, crushing, missType, abilityActionSlotType, abilityId, sourceUnit, targetUnit)
-    if not KNC.variables.enabled then return end
 
-    -- Only process player actions
-    if sourceUnitTag ~= "player" then return end
+--------------------------------------------------------------------------------
+-- EVENT HANDLERS
+--------------------------------------------------------------------------------
 
-    -- Look for light attacks
+--- Handles combat events to detect light attacks
+-- This is the primary tracking mechanism. We filter for player light attacks
+-- and increment the stack count for the target.
+--
+-- @param eventCode number Event identifier
+-- @param sourceUnitTag string "player", "group1", etc.
+-- @param sourceName string Localized source name
+-- @param sourceDisplayName string Source @name
+-- @param targetUnitTag string Target unit tag
+-- @param targetName string Localized target name
+-- @param targetDisplayName string Target @name
+-- @param abilityName string Name of the ability
+-- @param abilityId number Ability ID
+-- @param actionSlotType number Action slot type
+-- @param result number Action result code (damage, heal, etc.)
+-- @param isError boolean Error flag
+-- @param hitValue number Damage/heal value
+-- @param powerType number Power type
+-- @param powerValue number Power value
+-- @param damageType number Damage type
+-- @param damageOverTime boolean DoT flag
+-- @param critical boolean Critical hit flag
+-- @param glancing boolean Glancing blow flag
+-- @param crushing boolean Crushing blow flag
+-- @param missType number Miss type
+-- @param abilityActionSlotType number Ability action slot type
+-- @param abilityIdDuplicate number Duplicate ability ID (ESO API quirk)
+-- @param sourceUnit number Source unit ID
+-- @param targetUnit number Target unit ID
+function KNC.Tracking.OnCombatEvent(eventCode, sourceUnitTag, sourceName, 
+    sourceDisplayName, targetUnitTag, targetName, targetDisplayName, 
+    abilityName, abilityId, actionSlotType, result, isError, hitValue, 
+    powerType, powerValue, damageType, damageOverTime, critical, glancing, 
+    crushing, missType, abilityActionSlotType, abilityIdDuplicate, 
+    sourceUnit, targetUnit)
+    
+    -- Early exit: addon disabled
+    if not KNC.variables.enabled then 
+        return 
+    end
+
+    -- Only process player actions (not pets, companions, etc.)
+    if sourceUnitTag ~= "player" then 
+        return 
+    end
+
+    -- Check if this combat event represents a light attack
     if KNC:IsLightAttack(result, abilityName, abilityActionSlotType, abilityId) then
-        -- Check if we have a valid target
+        -- Get the target name, fall back to reticle target if not in event
         local target = targetName or GetUnitName("reticleover")
-        if not target then return end
+        
+        -- Must have a valid target to track
+        if not target or target == "" then 
+            return 
+        end
 
-        -- Increment stacks for the current target
+        -- Increment stacks for this target
         KNC.Tracking.IncrementStacks(target)
     end
 end
--- Event handler for target changes
-function KNC.Tracking.OnTargetChanged(eventCode)
-    if not KNC.variables.enabled then return end
 
-    -- Save the current target's stacks
-    if KNC.currentTarget then
+--- Handles target changes to preserve per-enemy stack state
+-- When the player switches targets, we save the current target's stacks
+-- and load the new target's cached stacks (or reset to 0).
+--
+-- @param eventCode number Event identifier
+function KNC.Tracking.OnTargetChanged(eventCode)
+    -- Early exit: addon disabled
+    if not KNC.variables.enabled then 
+        return 
+    end
+
+    -- Save the current target's stacks to cache
+    if KNC.currentTarget and KNC.currentTarget ~= "" then
         KNC.enemyStacks[KNC.currentTarget] = {
             stacks = KNC.currentStacks,
             timestamp = GetGameTimeMilliseconds()
         }
+        
+        if KNC.variables.debugMode then
+            d("[KNC] Saved stacks for " .. KNC.currentTarget .. ": " .. KNC.currentStacks)
+        end
     end
 
-    -- Load new target's stacks or reset to zero
+    -- Get the new target
     local newTarget = GetUnitName("reticleover")
-    if newTarget then
+    
+    if newTarget and newTarget ~= "" then
+        -- Have a new target: load cached stacks or start at 0
         KNC.currentTarget = newTarget
+        
         if KNC.enemyStacks[newTarget] then
             KNC.currentStacks = KNC.enemyStacks[newTarget].stacks
+            
+            if KNC.variables.debugMode then
+                d("[KNC] Loaded stacks for " .. newTarget .. ": " .. KNC.currentStacks)
+            end
         else
             KNC.currentStacks = 0
+            
+            if KNC.variables.debugMode then
+                d("[KNC] New target: " .. newTarget .. " (0 stacks)")
+            end
         end
     else
+        -- No target: clear current tracking (but cache is preserved)
         KNC.currentTarget = nil
         KNC.currentStacks = 0
     end
 
-    -- Update UI
+    -- Update the UI to reflect the new state
     KNC.Interface.UpdateUI()
 end
--- Event handler for effect changes (for debuff tracking)
+
+--- Handles effect changes to sync with game's effect system
+-- This provides authoritative sync with the game's actual effect tracking.
+-- If the game reports different stack counts or effect fade, we sync to it.
+--
+-- @param eventCode number Event identifier
+-- @param unitTag string Affected unit tag
+-- @param effectName string Effect name
+-- @param effectId number Effect ability ID
+-- @param result number EFFECT_RESULT_* constant
+-- @param stackCount number Current stack count from game
 function KNC.Tracking.OnEffectChanged(eventCode, unitTag, effectName, effectId, result, stackCount)
-    if not KNC.variables.enabled then return end
-
-    -- Only process our specific debuff
-    if effectId == KNC.KHALNAR_ABILITY_ID then
-        if result == EFFECT_RESULT_GAINED or result == EFFECT_RESULT_UPDATED then
-            -- Sync with game effects
-            KNC.currentStacks = stackCount
-            KNC.Interface.UpdateUI()
-        elseif result == EFFECT_RESULT_FADED then
-            -- Reset stacks when debuff fades
-            KNC.currentStacks = 0
-            KNC.Interface.UpdateUI()
-        end
+    -- Early exit: addon disabled
+    if not KNC.variables.enabled then 
+        return 
     end
-end
--- Increment stacks for current target
-function KNC.Tracking.IncrementStacks(targetName)
-    if KNC.currentStacks < KNC.MAX_STACKS then
-        KNC.currentStacks = KNC.currentStacks + 1
 
+    -- Only process the Khalnar's Nightmare effect
+    if effectId ~= KNC.KHALNAR_ABILITY_ID then 
+        return 
+    end
+    
+    if result == EFFECT_RESULT_GAINED or result == EFFECT_RESULT_UPDATED then
+        -- Effect gained or updated: sync our stacks with game
+        local previousStacks = KNC.currentStacks
+        KNC.currentStacks = stackCount
+        
+        if KNC.variables.debugMode and previousStacks ~= stackCount then
+            d("[KNC] Synced stacks from effect: " .. previousStacks .. " -> " .. stackCount)
+        end
+        
+        KNC.Interface.UpdateUI()
+        
+    elseif result == EFFECT_RESULT_FADED then
+        -- Effect faded: set procced and stacks reset
         if KNC.variables.debugMode then
-            d("Khalnar's Nightmare - Stacks incremented for " .. targetName .. ": " .. KNC.currentStacks .. "/" .. KNC.MAX_STACKS)
+            d("[KNC] Effect faded - stacks reset")
         end
-
-        -- Trigger proc when 5 stacks reached
-        if KNC.currentStacks >= KNC.MAX_STACKS then
-            KNC.Tracking.ProcSet()
-        end
-
-        -- Update UI
+        
+        KNC.currentStacks = 0
         KNC.Interface.UpdateUI()
     end
 end
--- Handle set proc
-function KNC.Tracking.ProcSet()
+
+--------------------------------------------------------------------------------
+-- STACK MANAGEMENT
+--------------------------------------------------------------------------------
+
+--- Increments the stack count for the current target
+-- Called when a light attack is detected. Handles the max stack cap
+-- and triggers the proc handler when 5 stacks are reached.
+--
+-- @param targetName string Name of the target being attacked
+function KNC.Tracking.IncrementStacks(targetName)
+    -- Don't exceed max stacks
+    if KNC.currentStacks >= KNC.MAX_STACKS then 
+        return 
+    end
+    
+    -- Increment the counter
+    KNC.currentStacks = KNC.currentStacks + 1
+
     if KNC.variables.debugMode then
-        d("Khalnar's Nightmare - Set procced!")
+        d("[KNC] Stacks: " .. KNC.currentStacks .. "/" .. KNC.MAX_STACKS .. " on " .. targetName)
     end
 
-    -- Optionally trigger any effect here when set procs
-end
--- Reset stacks for current target
-function KNC.Tracking.ResetStacks()
-    KNC.currentStacks = 0
+    -- Check for proc (5 stacks reached)
+    if KNC.currentStacks >= KNC.MAX_STACKS then
+        KNC.Tracking.OnProcTriggered()
+    end
+
+    -- Update the UI
     KNC.Interface.UpdateUI()
-
-    if KNC.variables.debugMode then
-        d("Khalnar's Nightmare - Stacks reset")
-    end
 end
--- Check if combat event represents a light attack
+
+--- Called when the set procs (5 stacks reached)
+-- Currently just logs in debug mode. This is an extension point for
+-- adding sound effects, visual notifications, etc.
+function KNC.Tracking.OnProcTriggered()
+    if KNC.variables.debugMode then
+        d("[KNC] *** SET PROCCED! ***")
+    end
+    
+    -- Extension point: add proc effects here
+    -- Examples:
+    --   PlaySound(SOUNDS.ABILITY_ULTIMATE_READY)
+    --   CreateProcAnimation()
+    --   FireCustomEvent("KNC_SET_PROCCED")
+end
+
+--- Alias for backward compatibility
+-- The original function name was ProcSet
+KNC.Tracking.ProcSet = KNC.Tracking.OnProcTriggered
+
+--- Resets the stack count to 0
+-- Can be called via slash command or programmatically.
+function KNC.Tracking.ResetStacks()
+    local previousStacks = KNC.currentStacks
+    KNC.currentStacks = 0
+    
+    if KNC.variables.debugMode then
+        d("[KNC] Stacks reset: " .. previousStacks .. " -> 0")
+    end
+    
+    -- Update UI to reflect reset
+    KNC.Interface.UpdateUI()
+end
+
+--------------------------------------------------------------------------------
+-- LIGHT ATTACK DETECTION
+--------------------------------------------------------------------------------
+
+--- Determines if a combat event represents a light attack
+-- Uses multiple heuristics since ESO doesn't have a single definitive
+-- way to identify light attacks.
+--
+-- Detection methods:
+-- 1. Check if abilityActionSlotType == ACTION_SLOT_TYPE_LIGHT_ATTACK
+-- 2. Check for abilityId == 0 with a damage result (basic attack pattern)
+--
+-- @param result number Combat action result code
+-- @param abilityName string Name of the ability
+-- @param abilityActionSlotType number Action slot type from event
+-- @param abilityId number Ability ID from event
+-- @return boolean True if this event represents a light attack
 function KNC:IsLightAttack(result, abilityName, abilityActionSlotType, abilityId)
-    -- Method 1: Check action slot type
+    -- Method 1: Explicit light attack slot type
+    -- This is the most reliable method when available
     if abilityActionSlotType == ACTION_SLOT_TYPE_LIGHT_ATTACK then
         return true
     end
 
-    -- Method 2: Check for no ability (abilityId == 0)
-    -- and basic damage result
-    if (not abilityId or abilityId == 0) and
-       (result == ACTION_RESULT_DAMAGE or result == ACTION_RESULT_CRITICAL_DAMAGE) then
+    -- Method 2: Basic attack pattern
+    -- Light attacks often have abilityId == 0 or nil with a damage result
+    -- This catches cases where the slot type isn't set
+    local isDamageResult = (result == ACTION_RESULT_DAMAGE or 
+                           result == ACTION_RESULT_CRITICAL_DAMAGE)
+    
+    if (not abilityId or abilityId == 0) and isDamageResult then
         return true
     end
 
+    -- Not detected as a light attack
     return false
 end
--- Cleanup old enemy stack data
+
+--------------------------------------------------------------------------------
+-- CACHE MANAGEMENT
+--------------------------------------------------------------------------------
+
+--- Cleans up stale enemy stack data
+-- Runs periodically to prevent memory growth from accumulated enemy data.
+-- Removes entries that haven't been updated in CACHE_EXPIRY_MS milliseconds.
 function KNC.Tracking.CleanupOldStacks()
     local currentTime = GetGameTimeMilliseconds()
-    local cutoffTime = currentTime - 300000 -- 5 minutes ago
+    local cutoffTime = currentTime - CACHE_EXPIRY_MS
+    local cleanedCount = 0
 
+    -- Iterate through cache and remove old entries
     for enemyName, data in pairs(KNC.enemyStacks) do
         if data.timestamp < cutoffTime then
             KNC.enemyStacks[enemyName] = nil
+            cleanedCount = cleanedCount + 1
         end
     end
+    
+    if KNC.variables.debugMode and cleanedCount > 0 then
+        d("[KNC] Cleaned up " .. cleanedCount .. " stale cache entries")
+    end
 
-    -- Restart timer
-    zo_callLater(function() KNC.Tracking.CleanupOldStacks() end, 30000)
+    -- Schedule next cleanup
+    zo_callLater(function() KNC.Tracking.CleanupOldStacks() end, CLEANUP_INTERVAL_MS)
 end
