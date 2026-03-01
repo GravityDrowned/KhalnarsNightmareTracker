@@ -44,6 +44,10 @@ local COLORS = {
     DEFAULT = {1, 1, 1, 1},  -- White: default/text color
 }
 
+--- Debug throttling - prevents spam in chat
+local lastDebugTime = 0
+local DEBUG_THROTTLE_MS = 500  -- Only log every 500ms during cooldown
+
 --------------------------------------------------------------------------------
 -- UI ELEMENT REFERENCES
 --------------------------------------------------------------------------------
@@ -124,6 +128,15 @@ function KNC.Interface.Initialize()
     -- This ensures the cooldown overlay and timer text update smoothly every frame
     KNC.container:SetHandler("OnUpdate", function()
         if KNC.Tracking.IsOnCooldown() then
+            -- Throttled debug output (every 500ms)
+            if KNC.variables.debugMode then
+                local now = GetGameTimeMilliseconds()
+                if not lastDebugTime or (now - lastDebugTime) > DEBUG_THROTTLE_MS then
+                    local remaining = KNC.Tracking.GetCooldownRemaining()
+                    d("[KNC] OnUpdate: Cooldown remaining: " .. remaining .. "ms (" .. string.format("%.1f", remaining/1000) .. "s)")
+                    lastDebugTime = now
+                end
+            end
             KNC.Interface.UpdateUI()
         end
     end)
@@ -175,6 +188,13 @@ function KNC.Interface.UpdateUI()
             
             -- Show cooldown overlay with remaining time
             KNC.cooldown:SetHidden(false)
+            
+            -- Debug log the StartCooldown call
+            if KNC.variables.debugMode then
+                d("[KNC] StartCooldown called: remaining=" .. cooldownRemaining .. 
+                  "ms, duration=" .. KNC.COOLDOWN_DURATION_MS .. "ms")
+            end
+            
             KNC.cooldown:StartCooldown(
                 cooldownRemaining,                    -- Remaining time in ms
                 KNC.COOLDOWN_DURATION_MS,            -- Total duration in ms
@@ -186,9 +206,16 @@ function KNC.Interface.UpdateUI()
             -- Dim the icon texture during cooldown
             KNC.texture:SetColor(0.4, 0.4, 0.4, 1)
             
-            -- Show cooldown time as text
-            KNC.label:SetText(string.format("%.1f", cooldownRemaining / 1000))
-            KNC.label:SetColor(1, 1, 1, 1)  -- White text
+            -- Show cooldown time as text with better precision
+            local seconds = cooldownRemaining / 1000
+            if seconds >= 10 then
+                KNC.label:SetText(string.format("%.0f", seconds))  -- "10", "11" etc
+            elseif seconds >= 1 then
+                KNC.label:SetText(string.format("%.1f", seconds))  -- "5.3", "2.1" etc
+            else
+                KNC.label:SetText(string.format("%.1f", seconds))  -- "0.9", "0.1" etc
+            end
+            KNC.label:SetColor(1, 1, 1, 1)  -- White text for visibility
             
         else
             -- === NORMAL STATE (tracking stacks) ===

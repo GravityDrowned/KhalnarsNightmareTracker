@@ -476,13 +476,18 @@ end
 --- Called when the set procs (5 stacks reached)
 -- Starts the cooldown timer and schedules skeleton spawn notification.
 function KNC.Tracking.OnProcTriggered()
-    if KNC.variables.debugMode then
-        d("[KNC] *** SET PROCCED! ***")
-    end
+    local currentTime = GetGameTimeMilliseconds()
     
     -- Start cooldown timer
     cooldownActive = true
-    cooldownEndTime = GetGameTimeMilliseconds() + COOLDOWN_DURATION_MS
+    cooldownEndTime = currentTime + COOLDOWN_DURATION_MS
+    
+    if KNC.variables.debugMode then
+        d("[KNC] *** SET PROCCED! ***")
+        d("[KNC] Cooldown started: Duration=" .. COOLDOWN_DURATION_MS .. "ms")
+        d("[KNC] Current time: " .. currentTime .. ", End time: " .. cooldownEndTime)
+        d("[KNC] Cooldown active: " .. tostring(cooldownActive))
+    end
     
     -- Schedule skeleton spawn notification (optional)
     zo_callLater(function()
