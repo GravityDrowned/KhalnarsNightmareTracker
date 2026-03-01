@@ -171,9 +171,12 @@ function KNC.Interface.UpdateUI()
         return
     end
 
-    -- Check if on cooldown
-    local cooldownRemaining = KNC.Tracking.GetCooldownRemaining()
-    local isOnCooldown = cooldownRemaining > 0
+    -- Check if on cooldown using the tracking module's authoritative method
+    local isOnCooldown = KNC.Tracking.IsOnCooldown()
+    local cooldownRemaining = 0
+    if isOnCooldown then
+        cooldownRemaining = KNC.Tracking.GetCooldownRemaining()
+    end
     
     -- Determine visibility:
     -- Show if we have stacks OR if alwaysShow is enabled OR if on cooldown
