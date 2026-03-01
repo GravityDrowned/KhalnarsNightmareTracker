@@ -40,6 +40,12 @@ local CLEANUP_INTERVAL_MS = 30000  -- 30 seconds
 --- How long to keep enemy stack data before considering it stale (in milliseconds)
 local CACHE_EXPIRY_MS = 300000     -- 5 minutes
 
+--- Last time we polled for debuff stacks (throttling mechanism)
+local lastPollTime = 0
+
+--- How often to poll for debuff updates (milliseconds)
+local POLL_INTERVAL_MS = 100  -- Poll every 100ms
+
 --------------------------------------------------------------------------------
 -- STATE VARIABLES
 --------------------------------------------------------------------------------
@@ -95,6 +101,14 @@ function KNC.Tracking.Initialize()
     -- Start periodic cleanup of stale enemy data
     zo_callLater(function() KNC.Tracking.CleanupOldStacks() end, CLEANUP_INTERVAL_MS)
     
+    -- Register continuous polling for debuff stacks
+    -- This runs every frame but is throttled internally to 100ms
+    EVENT_MANAGER:RegisterForUpdate(
+        "KNC_PollStacks",
+        0,  -- Every frame (throttled internally)
+        KNC.Tracking.PollTargetStacks
+    )
+    
     if KNC.variables.debugMode then
         d("[KNC] Tracking module initialized")
     end
@@ -122,6 +136,49 @@ function KNC.Tracking.GetTargetDebuffStacks()
     
     -- No debuff found
     return 0
+end
+
+--- Updates stack count by polling the target's debuffs
+-- Called periodically to ensure we catch all changes, including when
+-- the debuff is consumed at 5 stacks (proc).
+-- Throttled to avoid performance impact.
+function KNC.Tracking.PollTargetStacks()
+    -- Throttle polling
+    local currentTime = GetGameTimeMilliseconds()
+    if currentTime - lastPollTime < POLL_INTERVAL_MS then
+        return
+    end
+    lastPollTime = currentTime
+    
+    -- Only poll if we have a target
+    if not KNC.currentTarget or KNC.currentTarget == "" then
+        -- No target: ensure stacks are 0
+        if KNC.currentStacks ~= 0 then
+            KNC.currentStacks = 0
+            KNC.Interface.UpdateUI()
+        end
+        return
+    end
+    
+    -- Poll actual debuff stacks
+    local actualStacks = KNC.Tracking.GetTargetDebuffStacks()
+    
+    -- Update if changed
+    if actualStacks ~= KNC.currentStacks then
+        local previousStacks = KNC.currentStacks
+        KNC.currentStacks = actualStacks
+        
+        if KNC.variables.debugMode then
+            d("[KNC] Poll update: " .. previousStacks .. " -> " .. actualStacks)
+        end
+        
+        -- Detect proc (stacks consumed)
+        if previousStacks >= KNC.MAX_STACKS and actualStacks == 0 then
+            KNC.Tracking.OnProcTriggered()
+        end
+        
+        KNC.Interface.UpdateUI()
+    end
 end
 
 --------------------------------------------------------------------------------
@@ -184,8 +241,30 @@ function KNC.Tracking.OnCombatEvent(eventCode, sourceUnitTag, sourceName,
             return 
         end
 
-        -- Increment stacks for this target
-        KNC.Tracking.IncrementStacks(target)
+        -- Update the current target if it changed
+        if KNC.currentTarget ~= target then
+            KNC.currentTarget = target
+        end
+
+        -- Poll the actual debuff stacks from the game immediately
+        -- This ensures instant feedback after each light attack
+        local actualStacks = KNC.Tracking.GetTargetDebuffStacks()
+        
+        if actualStacks ~= KNC.currentStacks then
+            local previousStacks = KNC.currentStacks
+            KNC.currentStacks = actualStacks
+            
+            if KNC.variables.debugMode then
+                d("[KNC] Stacks: " .. previousStacks .. " -> " .. actualStacks .. " on " .. target)
+            end
+            
+            -- Check if set procced (stacks consumed: was at max, now 0)
+            if previousStacks >= KNC.MAX_STACKS and actualStacks == 0 then
+                KNC.Tracking.OnProcTriggered()
+            end
+            
+            KNC.Interface.UpdateUI()
+        end
     end
 end
 
@@ -255,8 +334,9 @@ function KNC.Tracking.OnTargetChanged(eventCode)
 end
 
 --- Handles effect changes to sync with game's effect system
--- This provides authoritative sync with the game's actual effect tracking.
--- If the game reports different stack counts or effect fade, we sync to it.
+-- NOTE: This event does NOT reliably fire for enemy debuffs ("reticleover"),
+-- only for player/group effects. Kept as fallback for edge cases.
+-- Primary tracking is done via polling in PollTargetStacks.
 --
 -- @param eventCode number Event identifier
 -- @param unitTag string Affected unit tag
@@ -307,8 +387,8 @@ end
 --------------------------------------------------------------------------------
 
 --- Increments the stack count for the current target
--- Called when a light attack is detected. Handles the max stack cap
--- and triggers the proc handler when 5 stacks are reached.
+-- DEPRECATED: Manual counting replaced by debuff polling.
+-- Kept for reference but no longer called.
 --
 -- @param targetName string Name of the target being attacked
 function KNC.Tracking.IncrementStacks(targetName)
