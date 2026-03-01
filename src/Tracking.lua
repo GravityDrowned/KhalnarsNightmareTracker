@@ -199,10 +199,12 @@ function KNC.Tracking.PollTargetStacks()
             d("[KNC] Poll update: " .. previousStacks .. " -> " .. actualStacks)
         end
         
-        -- Detect proc (stacks consumed)
-        if previousStacks >= KNC.MAX_STACKS and actualStacks == 0 then
-            KNC.Tracking.OnProcTriggered()
-        end
+         -- Detect proc (stacks consumed)
+         -- Check for >= 4 stacks because the 5th stack is consumed atomically
+         -- and we often see 4->0 instead of 5->0 due to polling timing
+         if previousStacks >= (KNC.MAX_STACKS - 1) and actualStacks == 0 then
+             KNC.Tracking.OnProcTriggered()
+         end
         
         KNC.Interface.UpdateUI()
     end
@@ -318,10 +320,12 @@ function KNC.Tracking.OnCombatEvent(eventCode, sourceUnitTag, sourceName,
                 d("[KNC] Stacks: " .. previousStacks .. " -> " .. actualStacks .. " on " .. target)
             end
             
-            -- Check if set procced (stacks consumed: was at max, now 0)
-            if previousStacks >= KNC.MAX_STACKS and actualStacks == 0 then
-                KNC.Tracking.OnProcTriggered()
-            end
+             -- Check if set procced (stacks consumed: was at 4-5, now 0)
+             -- Check for >= 4 stacks because the 5th stack is consumed atomically
+             -- and we often see 4->0 instead of 5->0 due to event timing
+             if previousStacks >= (KNC.MAX_STACKS - 1) and actualStacks == 0 then
+                 KNC.Tracking.OnProcTriggered()
+             end
             
             KNC.Interface.UpdateUI()
         end
